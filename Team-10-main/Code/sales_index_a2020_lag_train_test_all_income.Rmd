@@ -1,0 +1,320 @@
+---
+title: "sales_index_a2020_lag_train_test_all_income"
+output: html_notebook
+---
+
+
+```{r}
+install.packages("mondate")
+library(mondate)
+
+library(stringr)
+
+library(lubridate)
+
+if (!require(remotes)) install.packages("remotes")
+remotes::install_github("keithabailey/PRMTools")
+library(PRMTools)
+
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+suppressPackageStartupMessages(if (!require(xts)) install.packages("xts"))
+library(xts)
+suppressPackageStartupMessages(if (!require(forecast)) install.packages("forecast") )
+library(forecast)
+
+if (!require(rlist)) install.packages("rlist")
+library(rlist)
+
+if (!require(Ecdat)) install.packages("Ecdat")
+library(Ecdat)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+
+if (!require(Hmisc)) install.packages("Hmisc")
+library(Hmisc)
+
+if (!require(ISLR)) install.packages("ISLR")
+library(ISLR)
+
+if (!require(olsrr)) install.packages("olsrr")
+library(olsrr)
+
+if (!require(car)) install.packages("car")
+library(car)
+
+if (!require(fastDummies)) install.packages("fastDummies")
+library(fastDummies)
+```
+
+```{r}
+#Read files
+
+sales_data_mod_a2020 <- read.csv("sales_data_mod_a2020.csv")
+
+head(sales_data_mod_a2020)
+
+```
+
+```{r}
+q1 = summary(sales_data_mod_a2020$comp_ratio_1000_total)[2]
+q3 = summary(sales_data_mod_a2020$comp_ratio_1000_total)[5]
+t_min = q1 - (3*IQR(sales_data_mod_a2020$comp_ratio_1000_total))
+t_max = q3 + (3*IQR(sales_data_mod_a2020$comp_ratio_1000_total))
+sales_data_mod_a2020 <- sales_data_mod_a2020%>% mutate(outlier = case_when(comp_ratio_1000_total<t_min ~ -1, comp_ratio_1000_total>t_max ~ 1, TRUE ~ 0))
+
+```
+
+
+```{r}
+sales_data_mod_a2020$month <- format(as.Date(sales_data_mod_a2020$zillow_month_day),"%m")
+nlag = 4
+sales_data_mod_a2020_lag <- sales_data_mod_a2020%>%group_by(zillow_zip)%>%arrange(desc(zillow_month_day))%>%mutate(zillow_sales_value_index_lag = lag(zillow_sales_value_index, n = nlag),zillow_month_day_lag = lag(zillow_month_day, n = nlag))
+
+
+sales_data_mod_a2020_lag <- sales_data_mod_a2020_lag%>%mutate(zillow_month_day_lag = ifelse(!is.na(zillow_sales_value_index_lag), zillow_month_day_lag, format(ceiling_date(as.Date(zillow_month_day), "month") + months(nlag) - days(1),"%Y-%m-%d") ))%>%arrange(zillow_zip,zillow_month_day)
+
+tail(sales_data_mod_a2020_lag%>%filter(zillow_zip == 10001)%>%select(zillow_month_day,zillow_month_day_lag,zillow_sales_value_index,zillow_sales_value_index_lag, outlier),nlag*2)
+
+
+```
+
+Sales all income levels Train model (train inference window 2021-05-31 - 2022-09-30):
+
+```{r}
+sales_data_mod_a2020_lag_train <- sales_data_mod_a2020_lag%>%filter(as.Date(zillow_month_day_lag)<as.Date("2022-10-31"))
+tail(sales_data_mod_a2020_lag_train%>%filter(zillow_zip == 10001)%>%select(zillow_month_day,zillow_month_day_lag,zillow_sales_value_index,zillow_sales_value_index_lag, outlier),nlag*2)
+list_columns <- colnames(sales_data_mod_a2020_lag_train)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_sales_value_index|var_zip|^month|^Total_income_per_capita", list_columns)]
+filter_columns = filter_columns[!filter_columns %in% c("month_number","zillow_sales_value_index")]
+df_lma2020_lag_train <- sales_data_mod_a2020_lag_train%>%filter(outlier==0)%>%filter(!is.na(zillow_sales_value_index_lag))%>%select(filter_columns)
+lma2020_lag_train <- lm(zillow_sales_value_index_lag ~ .-zillow_zip, data=df_lma2020_lag_train)  
+
+cat("\nAdjusted R square:")
+summary(lma2020_lag_train)$adj.r.squared
+cat("\nFStatistic:")
+summary(lma2020_lag_train)$fstatistic
+
+cat("\nNumber of significant variables:")
+nrow(data.frame(summary(lma2020_lag_train)$coefficients)%>%filter(.[[4]] <0.05))
+cat("\nLargest coefficients:")
+data.frame(summary(lma2020_lag_train)$coefficients)%>%filter(.[[4]] <0.05)%>% arrange(desc(abs(Estimate)))
+sel_columns_lma2020_lag_train <- row.names(data.frame(summary(lma2020_lag_train)$coefficients)%>%filter(.[[4]] <0.05))
+
+
+```
+Optimized train model and test window:
+
+```{r}
+df_lma2020_lag_opt_train <- sales_data_mod_a2020_lag_train%>%filter(outlier==0)%>%filter(!is.na(zillow_sales_value_index_lag))%>%select(c(sel_columns_lma2020_lag_train[!grepl("var_zip|^month|*Intercept*",sel_columns_lma2020_lag_train)],var_zip,month,zillow_sales_value_index_lag,zillow_month_day_lag,Total_income_per_capita))
+
+lma2020_lag_opt_train <- lm(zillow_sales_value_index_lag ~ . -zillow_zip, data=df_lma2020_lag_opt_train%>%select(!zillow_month_day_lag))
+
+cat("\nAdjusted R square in train window:")
+summary(lma2020_lag_opt_train)$adj.r.squared
+cat("\nFStatistic in train window:")
+summary(lma2020_lag_opt_train)$fstatistic
+
+cat("\nNumber of significant variables:")
+nrow(data.frame(summary(lma2020_lag_opt_train)$coefficients))
+cat("\nLargest coefficients:")
+data.frame(summary(lma2020_lag_opt_train)$coefficients)%>% arrange(desc(abs(Estimate)))
+cat("\nComplaint coefficients:")
+data.frame(summary(lma2020_lag_opt_train)$coefficients)[sel_columns_lma2020_lag_train[grepl("comp_ratio|Intercept",sel_columns_lma2020_lag_train)],]%>% arrange(desc(abs(Estimate)))
+
+dfpred_lma2020_lag_opt_test <- sales_data_mod_a2020_lag%>%filter(as.Date(zillow_month_day_lag)>=as.Date("2022-10-31"))%>%filter(outlier==0)%>%filter(var_zip!="_11249")%>%select(zillow_month_day, zillow_sales_value_index,Total_income_per_capita, c(sel_columns_lma2020_lag_train[!grepl("var_zip|^month|*Intercept*",sel_columns_lma2020_lag_train)],var_zip,month,zillow_sales_value_index_lag,zillow_month_day_lag))
+
+dfpred_lma2020_lag_opt_train <- sales_data_mod_a2020_lag%>%filter(as.Date(zillow_month_day_lag)<as.Date("2022-10-31"))%>%filter(outlier==0)%>%filter(var_zip!="_11249")%>%select(c(sel_columns_lma2020_lag_train[!grepl("var_zip|^month|*Intercept*",sel_columns_lma2020_lag_train)],var_zip,month,zillow_sales_value_index_lag,zillow_month_day_lag,Total_income_per_capita))
+
+tail(dfpred_lma2020_lag_opt_test%>%filter(zillow_zip == 10030))
+
+dfpred_lma2020_lag_opt_train$prediction <- predict(lma2020_lag_opt_train, newdata=dfpred_lma2020_lag_opt_train%>%select(!zillow_month_day_lag))
+
+dfpred_lma2020_lag_opt_test$prediction <- predict(lma2020_lag_opt_train, newdata=dfpred_lma2020_lag_opt_test%>%select(!zillow_month_day_lag))
+
+dfpred_lma2020_lag_opt_test$train_prediction <- NA
+dfpred_lma2020_lag_opt_train$train_prediction <- dfpred_lma2020_lag_opt_train$prediction
+dfpred_lma2020_lag_opt_train$prediction <- NA
+dfpred_lma2020_lag_opt_test <- rbind(dfpred_lma2020_lag_opt_train,dfpred_lma2020_lag_opt_test)
+
+
+y_actual = dfpred_lma2020_lag_opt_test%>%filter(as.Date(zillow_month_day_lag)>=as.Date("2022-10-31")&as.Date(zillow_month_day_lag)<as.Date("2023-02-28"))%>%select(zillow_sales_value_index_lag)
+y_pred = dfpred_lma2020_lag_opt_test%>%filter(as.Date(zillow_month_day_lag)>=as.Date("2022-10-31")&as.Date(zillow_month_day_lag)<as.Date("2023-02-28"))%>%select(prediction)
+
+y_actual=y_actual$zillow_sales_value_index_lag
+y_pred = y_pred$prediction
+
+cat("\nMean absolute error in prediction window:")
+mean(abs((y_actual-y_pred)/y_actual))
+cat("\nAdjusted R2 in prediction window:")
+k = nrow(data.frame(summary(lma2020_lag_opt_train)$coefficients))
+n = length(y_actual)
+1 - ((1-cor(y_actual,y_pred)^2)*(n-1)/(n-k-1))
+
+
+
+ggplot(data = dfpred_lma2020_lag_opt_test%>%select(zillow_month_day_lag, prediction, train_prediction, zillow_sales_value_index_lag),aes(x = as.Date(zillow_month_day_lag))) + 
+  stat_summary(aes(y = prediction, colour = "Predicted Index in test window (n+4)"),geom = "line", fun = "mean", linewidth= 1) +
+  stat_summary(aes(y = prediction),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "red") +
+  stat_summary(aes(y=train_prediction, colour = "Predicted Index in training window"), geom = "line", fun = "mean", linewidth= 1) +
+  stat_summary(aes(y = train_prediction),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.05,fill = "black") +
+  stat_summary(aes(y=zillow_sales_value_index_lag, colour = "Actual Index"), geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = zillow_sales_value_index_lag),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "blue") +
+  scale_colour_manual("", 
+                      breaks = c("Predicted Index in test window (n+4)", "Actual Index", "Predicted Index in training window"),
+                      values = c("red", "blue", "black")) +
+  xlab("Date")+
+  ylab("Sales Zillow Home Value Index")+
+  ggtitle("2021-2023 Zillow Home Value Time Series \n Forecast Prediction (n+4) vs Actual Index")
+
+```
+Identify regression coefficients with NA values and exclude them as it could indicate that variables are linearly related to other variables.
+```{r}
+coef <- data.frame(coef(lma2020_lag_train))
+coef$rowname <- rownames(coef)
+coef <- coef %>%
+filter(rowname != "var_zip_11694")
+
+coef_filtered_na <- coef %>% 
+  filter(is.na(coef.lma2020_lag_train.))
+na_list <- coef_filtered_na$rowname
+
+df_lma2020_lag_train_2 <- df_lma2020_lag_train %>% 
+  select(-na_list)
+str(df_lma2020_lag_train_2)
+
+lma2020_lag_train_2 <- lm(zillow_sales_value_index_lag ~ .-
+                            zillow_zip -
+                            Total_income_per_capita, data = df_lma2020_lag_train_2)
+summary(lma2020_lag_train_2)
+```
+Identify regression coefficients with NA values and exclude them as it could indicate that variables are linearly related to other variables.
+```{r}
+# (i.e., lma2020_lag_opt_train)
+coef2 <- data.frame(coef(lma2020_lag_opt_train))
+coef2$rowname <- rownames(coef2)
+coef2 <- coef2 %>% 
+  filter(rowname != "var_zip_11694")
+
+coef_filtered_na2 <- coef2 %>% 
+  filter(is.na(coef.lma2020_lag_opt_train.))
+na_list <- coef_filtered_na2$rowname
+
+df_lma2020_lag_opt_train_2 <- df_lma2020_lag_opt_train %>% 
+  select(-na_list)
+
+lma2020_lag_opt_train_2 <- lm(zillow_sales_value_index_lag ~ .-
+                            zillow_zip -
+                            Total_income_per_capita, data=df_lma2020_lag_opt_train%>%select(!zillow_month_day_lag))
+options(max.print=1000000)
+summary(lma2020_lag_opt_train_2)
+```
+
+Perform variable selection using two different approaches 1) forward stepwise selection based on p-values and 2) backward elimination based on p-values.
+```{r}
+# Variable selection for the unoptimized model (i.e., lma2020_lag_train)
+# forward selection
+v_select1 <- ols_step_forward_p(lma2020_lag_train_2)
+v_select1
+plot(v_select1)
+
+# backward selection
+v_select2 <- ols_step_backward_p(lma2020_lag_train_2)
+v_select2
+plot(v_select2)
+
+# Variable selection for the optimized model (i.e., lma2020_lag_opt_train)
+# forward selection
+v_select3 <- ols_step_forward_p(lma2020_lag_opt_train_2)
+v_select3
+plot(v_select3)
+
+# backward selection
+v_select4 <- ols_step_backward_p(lma2020_lag_opt_train_2)
+v_select4
+plot(v_select4)
+```
+Convert the categorical variable "var_zip" into dummy variables in R.
+```{r}
+df_lma2020_lag_train_3 <- dummy_cols(df_lma2020_lag_train_2, select_columns = "var_zip", remove_first_dummy = FALSE)
+options(max.print=1000000)
+```
+Built a new model with dummy variables for the variable "var_zip"
+```{r}
+lma2020_lag_train_3 <- lm(zillow_sales_value_index_lag ~ .-
+                            zillow_zip -
+                            Total_income_per_capita -
+                            var_zip -
+                            var_zip__11249 -
+                            var_zip__11694, data = df_lma2020_lag_train_3)
+summary(lma2020_lag_train_3)
+```
+```{r}
+# forward selection - this step appears not to work as it stalls out.
+# v_select5 <- ols_step_forward_p(lma2020_lag_train_3)
+# v_select5
+# plot(v_select5)
+
+# backward selection
+v_select6 <- ols_step_backward_p(lma2020_lag_train_3)
+v_select6
+plot(v_select6)
+
+# rebuild a model based on backward elimination for v_select6 and calculate VIF values. After running this code, I also removed "var_zip__11249" which had NA for coefficient and "comp_ratio__11249" which had a very high VIF value. Now there are no VIF values > 10 which indicates no collinearity.
+v_select6_exclude <-v_select6[["removed"]]
+lma2020_lag_train_4 <- lm(zillow_sales_value_index_lag ~ .-
+                            zillow_zip -
+                            Total_income_per_capita -
+                            var_zip -
+                            comp_ratio_1000_Noise -
+                            var_zip__11249 -
+                            comp_ratio_1000_total, data = df_lma2020_lag_train_3 %>% select(-one_of(v_select6_exclude)))
+summary(lma2020_lag_train_4)
+vif(lma2020_lag_train_4)
+```
+
+```{r}
+# Extract the coefficients from the summary
+coef_names <- row.names(summary(lma2020_lag_train_2)$coefficients)
+
+# Count the number of coefficients that contain "var_zip" in their names
+num_var_zip_coef <- sum(grepl("var_zip[_0-9]*", coef_names))
+num_var_zip_coef
+
+# Count the number of coefficients that contain "comp_" in their names
+num_comp_coef <- sum(grepl("comp_[[:alnum:]]+", coef_names))
+num_comp_coef
+
+# count the number of coefficients in the model.
+length(coef(lma2020_lag_train_2))
+
+# Extract the coefficients from the summary
+coef_names2 <- row.names(summary(lma2020_lag_opt_train_2)$coefficients)
+
+# Count the number of coefficients that contain "var_zip" in their names
+num_var_zip_coef2 <- sum(grepl("var_zip[_0-9]*", coef_names2))
+num_var_zip_coef2
+
+# Count the number of coefficients that contain "comp_" in their names
+num_comp_coef2 <- sum(grepl("comp_[[:alnum:]]+", coef_names2))
+num_comp_coef2
+
+# count the number of coefficients in the model.
+length(coef(lma2020_lag_train_4))
+
+# Extract the coefficients from the summary
+coef_names3 <- row.names(summary(lma2020_lag_train_4)$coefficients)
+
+# Count the number of coefficients that contain "var_zip" in their names
+num_var_zip_coef3 <- sum(grepl("var_zip[_0-9]*", coef_names3))
+num_var_zip_coef3
+
+# Count the number of coefficients that contain "comp_" in their names
+num_comp_coef3 <- sum(grepl("comp_[[:alnum:]]+", coef_names3))
+num_comp_coef3
+
+# count the number of coefficients in the model.
+length(coef(lma2020_lag_train_4))
+```

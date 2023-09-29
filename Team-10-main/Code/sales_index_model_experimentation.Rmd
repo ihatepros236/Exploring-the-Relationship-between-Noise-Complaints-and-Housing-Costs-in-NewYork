@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+
+install.packages("mondate")
+library(mondate)
+
+
+if (!require(remotes)) install.packages("remotes")
+remotes::install_github("keithabailey/PRMTools")
+library(PRMTools)
+
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+suppressPackageStartupMessages(if (!require(xts)) install.packages("xts"))
+library(xts)
+suppressPackageStartupMessages(if (!require(forecast)) install.packages("forecast") )
+library(forecast)
+
+if (!require(rlist)) install.packages("rlist")
+library(rlist)
+
+
+if (!require(Ecdat)) install.packages("Ecdat")
+library(Ecdat)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+
+if (!require(Hmisc)) install.packages("Hmisc")
+library(Hmisc)
+
+if (!require(ISLR)) install.packages("ISLR")
+library(ISLR)
+```
+
+```{r}
+#Read files
+
+sales_data_mod_a2020 <- read.csv("sales_data_mod_a2020.csv")
+sales_data_mod_b2020 <- read.csv("sales_data_mod_b2020.csv")
+
+```
+
+
+
+```{r}
+sales_data_mod_a2020$month <- format(as.Date(sales_data_mod_a2020$zillow_month_day),"%m")
+min_date <- as.Date(min(sales_data_mod_a2020$zillow_month_day))
+sales_data_mod_a2020$month_number <- mondf(min_date, sales_data_mod_a2020$zillow_month_day)
+list_columns <- colnames(sales_data_mod_a2020)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_sales_value_index|var_zip|^month", list_columns)]
+df_lma2020 <- sales_data_mod_a2020%>%filter(outlier==0)%>%filter(income_group=="low")%>%select(filter_columns)
+lma2020 <- lm(zillow_sales_value_index ~ ., data=df_lma2020)
+summary(lma2020)
+
+```
+
+```{r}
+sales_data_mod_b2020$month <- format(as.Date(sales_data_mod_b2020$zillow_month_day),"%m")
+min_date <- as.Date(min(sales_data_mod_b2020$zillow_month_day))
+sales_data_mod_b2020$month_number <- mondf(min_date, sales_data_mod_b2020$zillow_month_day)
+list_columns <- colnames(sales_data_mod_b2020)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_sales_value_index|var_zip|^month", list_columns)]
+df_lmb2020 <- sales_data_mod_b2020%>%filter(outlier==0)%>%filter(income_group=="low")%>%select(filter_columns)
+lmb2020 <- lm(zillow_sales_value_index ~ ., data=df_lmb2020)
+summary(lmb2020)
+```
+
+

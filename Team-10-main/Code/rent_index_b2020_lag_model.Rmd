@@ -1,0 +1,248 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+install.packages("mondate")
+library(mondate)
+
+library(stringr)
+
+library(lubridate)
+
+if (!require(remotes)) install.packages("remotes")
+remotes::install_github("keithabailey/PRMTools")
+library(PRMTools)
+
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+suppressPackageStartupMessages(if (!require(xts)) install.packages("xts"))
+library(xts)
+suppressPackageStartupMessages(if (!require(forecast)) install.packages("forecast") )
+library(forecast)
+
+if (!require(rlist)) install.packages("rlist")
+library(rlist)
+
+
+if (!require(Ecdat)) install.packages("Ecdat")
+library(Ecdat)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+
+if (!require(Hmisc)) install.packages("Hmisc")
+library(Hmisc)
+
+if (!require(ISLR)) install.packages("ISLR")
+library(ISLR)
+```
+
+```{r}
+#Read files
+
+rent_data_mod_b2020 <- read.csv("rent_data_mod_b2020.csv")
+rent_data_mod_b2020 <- read.csv("rent_data_mod_b2020.csv")
+
+head(rent_data_mod_b2020)
+
+```
+
+
+```{r}
+rent_data_mod_b2020$month <- format(as.Date(rent_data_mod_b2020$zillow_month_day),"%m")
+nlag = 4
+rent_data_mod_b2020_lag <- rent_data_mod_b2020%>%group_by(zillow_zip)%>%arrange(desc(zillow_month_day))%>%mutate(zillow_rent_value_index_lag = lag(zillow_rent_value_index, n = nlag),zillow_month_day_lag = lag(zillow_month_day, n = nlag))
+
+
+rent_data_mod_b2020_lag <- rent_data_mod_b2020_lag%>%mutate(zillow_month_day_lag = ifelse(!is.na(zillow_rent_value_index_lag), zillow_month_day_lag, format(ceiling_date(as.Date(zillow_month_day), "month") + months(nlag) - days(1),"%Y-%m-%d") ))%>%arrange(zillow_zip,zillow_month_day)
+
+tail(rent_data_mod_b2020_lag%>%filter(zillow_zip == 10001)%>%select(zillow_month_day,zillow_month_day_lag,zillow_rent_value_index,zillow_rent_value_index_lag, outlier),nlag*2)
+
+
+```
+
+```{r}
+list_columns <- colnames(rent_data_mod_b2020_lag)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_rent_value_index|var_zip|^month", list_columns)]
+filter_columns = filter_columns[!filter_columns %in% c("month_number","zillow_rent_value_index")]
+df_lmb2020_low_lag <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="low")%>%filter(!is.na(zillow_rent_value_index_lag))%>%select(filter_columns)
+lmb2020_low_lag <- lm(zillow_rent_value_index_lag ~ .-zillow_zip, data=df_lmb2020_low_lag)  
+
+print("Adjusted R square:")
+summary(lmb2020_low_lag)$adj.r.squared
+print("FStatistic:")
+summary(lmb2020_low_lag)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lmb2020_low_lag)$coefficients)%>%filter(.[[4]] <0.05))
+print("Largest coefficients:")
+head(data.frame(summary(lmb2020_low_lag)$coefficients)%>%filter(.[[4]] <0.05)%>% arrange(desc(abs(Estimate))),20)
+sel_columns_lmb2020_low_lag <- row.names(data.frame(summary(lmb2020_low_lag)$coefficients)%>%filter(.[[4]] <0.05))
+
+```
+
+```{r}
+df_lmb2020_low_lag_opt <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="low")%>%filter(!is.na(zillow_rent_value_index_lag))%>%select(c(sel_columns_lmb2020_low_lag[!grepl("var_zip|^month|*Intercept*",sel_columns_lmb2020_low_lag)],var_zip,month,zillow_rent_value_index_lag,zillow_month_day_lag))
+
+lmb2020_low_lag_opt <- lm(zillow_rent_value_index_lag ~ . -zillow_zip, data=df_lmb2020_low_lag_opt%>%select(!zillow_month_day_lag))
+
+print("Adjusted R square:")
+summary(lmb2020_low_lag_opt)$adj.r.squared
+print("FStatistic:")
+summary(lmb2020_low_lag_opt)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lmb2020_low_lag_opt)$coefficients))
+print("Largest coefficients:")
+data.frame(summary(lmb2020_low_lag_opt)$coefficients)%>% arrange(desc(abs(Estimate)))
+print("Complaint coefficients:")
+data.frame(summary(lmb2020_low_lag_opt)$coefficients)[sel_columns_lmb2020_low_lag[grepl("comp_ratio|Intercept",sel_columns_lmb2020_low_lag)],]%>% arrange(desc(abs(Estimate)))
+
+dfpred_lmb2020_low_lag_opt <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="low")%>%select(c(sel_columns_lmb2020_low_lag[!grepl("var_zip|^month|*Intercept*",sel_columns_lmb2020_low_lag)],var_zip,month,zillow_rent_value_index_lag,zillow_month_day_lag))
+
+tail(dfpred_lmb2020_low_lag_opt)
+
+dfpred_lmb2020_low_lag_opt$prediction <- predict(lmb2020_low_lag_opt, newdata=dfpred_lmb2020_low_lag_opt%>%select(!zillow_month_day_lag))
+
+ggplot(data = dfpred_lmb2020_low_lag_opt%>%select(zillow_month_day_lag, prediction, zillow_rent_value_index_lag),aes(x = as.Date(zillow_month_day_lag))) + 
+  stat_summary(aes(y = prediction, colour = "Forecasted Index (n+4)"),geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = prediction),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "red") +
+  stat_summary(aes(y=zillow_rent_value_index_lag, colour = "Actual Index"), geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = zillow_rent_value_index_lag),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "blue") +
+  scale_colour_manual("", 
+                      breaks = c("Forecasted Index (n+4)", "Actual Index"),
+                      values = c("red", "blue")) +
+  xlab("Date")+
+  ylab("Rent Zillow Home Value Index")+
+  ggtitle("2010-2019 Zillow Home Value Time Series \n Low income areas - Forecast (n+4) vs Predicted")
+
+
+
+```
+
+```{r}
+list_columns <- colnames(rent_data_mod_b2020_lag)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_rent_value_index|var_zip|^month", list_columns)]
+filter_columns = filter_columns[!filter_columns %in% c("month_number","zillow_rent_value_index")]
+df_lmb2020_medium_lag <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="medium")%>%filter(!is.na(zillow_rent_value_index_lag))%>%select(filter_columns)
+lmb2020_medium_lag <- lm(zillow_rent_value_index_lag ~ .-zillow_zip, data=df_lmb2020_medium_lag)  
+
+print("Adjusted R square:")
+summary(lmb2020_medium_lag)$adj.r.squared
+print("FStatistic:")
+summary(lmb2020_medium_lag)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lmb2020_medium_lag)$coefficients)%>%filter(.[[4]] <0.05))
+print("Largest coefficients:")
+head(data.frame(summary(lmb2020_medium_lag)$coefficients)%>%filter(.[[4]] <0.05)%>% arrange(desc(abs(Estimate))),20)
+sel_columns_lmb2020_medium_lag <- row.names(data.frame(summary(lmb2020_medium_lag)$coefficients)%>%filter(.[[4]] <0.05))
+
+```
+
+
+```{r}
+df_lmb2020_medium_lag_opt <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="medium")%>%filter(!is.na(zillow_rent_value_index_lag))%>%select(c(sel_columns_lmb2020_medium_lag[!grepl("var_zip|^month|*Intercept*",sel_columns_lmb2020_medium_lag)],var_zip,month,zillow_rent_value_index_lag,zillow_month_day_lag))
+
+lmb2020_medium_lag_opt <- lm(zillow_rent_value_index_lag ~ . -zillow_zip, data=df_lmb2020_medium_lag_opt%>%select(!zillow_month_day_lag))
+
+print("Adjusted R square:")
+summary(lmb2020_medium_lag_opt)$adj.r.squared
+print("FStatistic:")
+summary(lmb2020_medium_lag_opt)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lmb2020_medium_lag_opt)$coefficients))
+print("Largest coefficients:")
+data.frame(summary(lmb2020_medium_lag_opt)$coefficients)%>% arrange(desc(abs(Estimate)))
+print("Complaint coefficients:")
+data.frame(summary(lmb2020_medium_lag_opt)$coefficients)[sel_columns_lmb2020_medium_lag[grepl("comp_ratio|Intercept",sel_columns_lmb2020_medium_lag)],]%>% arrange(desc(abs(Estimate)))
+
+dfpred_lmb2020_medium_lag_opt <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="medium")%>%filter(var_zip != "_11366")%>%select(c(sel_columns_lmb2020_medium_lag[!grepl("var_zip|^month|*Intercept*",sel_columns_lmb2020_medium_lag)],var_zip,month,zillow_rent_value_index_lag,zillow_month_day_lag))
+
+tail(dfpred_lmb2020_medium_lag_opt)
+
+dfpred_lmb2020_medium_lag_opt$prediction <- predict(lmb2020_medium_lag_opt, newdata=dfpred_lmb2020_medium_lag_opt%>%select(!zillow_month_day_lag))
+
+ggplot(data = dfpred_lmb2020_medium_lag_opt%>%select(zillow_month_day_lag, prediction, zillow_rent_value_index_lag),aes(x = as.Date(zillow_month_day_lag))) + 
+  stat_summary(aes(y = prediction, colour = "Forecasted Index (n+4)"),geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = prediction),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "red") +
+  stat_summary(aes(y=zillow_rent_value_index_lag, colour = "Actual Index"), geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = zillow_rent_value_index_lag),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "blue") +
+  scale_colour_manual("", 
+                      breaks = c("Forecasted Index (n+4)", "Actual Index"),
+                      values = c("red", "blue")) +
+  xlab("Date")+
+  ylab("Rent Zillow Home Value Index")+
+  ggtitle("2010-2019 Zillow Home Value Time Series \n Medium income areas - Forecast (n+4) vs Predicted")
+
+
+```
+
+
+```{r}
+list_columns <- colnames(rent_data_mod_b2020_lag)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_rent_value_index|var_zip|^month", list_columns)]
+filter_columns = filter_columns[!filter_columns %in% c("month_number","zillow_rent_value_index")]
+df_lmb2020_high_lag <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="high")%>%filter(!is.na(zillow_rent_value_index_lag))%>%select(filter_columns)
+lmb2020_high_lag <- lm(zillow_rent_value_index_lag ~ .-zillow_zip, data=df_lmb2020_high_lag)  
+
+print("Adjusted R square:")
+summary(lmb2020_high_lag)$adj.r.squared
+print("FStatistic:")
+summary(lmb2020_high_lag)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lmb2020_high_lag)$coefficients)%>%filter(.[[4]] <0.05))
+print("Largest coefficients:")
+head(data.frame(summary(lmb2020_high_lag)$coefficients)%>%filter(.[[4]] <0.05)%>% arrange(desc(abs(Estimate))),20)
+sel_columns_lmb2020_high_lag <- row.names(data.frame(summary(lmb2020_high_lag)$coefficients)%>%filter(.[[4]] <0.05))
+
+```
+
+
+```{r}
+df_lmb2020_high_lag_opt <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="high")%>%filter(!is.na(zillow_rent_value_index_lag))%>%select(c(sel_columns_lmb2020_high_lag[!grepl("var_zip|^month|*Intercept*",sel_columns_lmb2020_high_lag)],var_zip,month,zillow_rent_value_index_lag,zillow_month_day_lag))
+
+lmb2020_high_lag_opt <- lm(zillow_rent_value_index_lag ~ . -zillow_zip, data=df_lmb2020_high_lag_opt%>%select(!zillow_month_day_lag))
+
+print("Adjusted R square:")
+summary(lmb2020_high_lag_opt)$adj.r.squared
+print("FStatistic:")
+summary(lmb2020_high_lag_opt)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lmb2020_high_lag_opt)$coefficients))
+print("Largest coefficients:")
+data.frame(summary(lmb2020_high_lag_opt)$coefficients)%>% arrange(desc(abs(Estimate)))
+print("Complaint coefficients:")
+data.frame(summary(lmb2020_high_lag_opt)$coefficients)[sel_columns_lmb2020_high_lag[grepl("comp_ratio|Intercept",sel_columns_lmb2020_high_lag)],]%>% arrange(desc(abs(Estimate)))
+
+dfpred_lmb2020_high_lag_opt <- rent_data_mod_b2020_lag%>%filter(outlier==0)%>%filter(income_group=="high")%>%select(c(sel_columns_lmb2020_high_lag[!grepl("var_zip|^month|*Intercept*",sel_columns_lmb2020_high_lag)],var_zip,month,zillow_rent_value_index_lag,zillow_month_day_lag))
+
+tail(dfpred_lmb2020_high_lag_opt)
+
+dfpred_lmb2020_high_lag_opt$prediction <- predict(lmb2020_high_lag_opt, newdata=dfpred_lmb2020_high_lag_opt%>%select(!zillow_month_day_lag))
+
+ggplot(data = dfpred_lmb2020_high_lag_opt%>%select(zillow_month_day_lag, prediction, zillow_rent_value_index_lag),aes(x = as.Date(zillow_month_day_lag))) + 
+  stat_summary(aes(y = prediction, colour = "Forecasted Index (n+4)"),geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = prediction),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "red") +
+  stat_summary(aes(y=zillow_rent_value_index_lag, colour = "Actual Index"), geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = zillow_rent_value_index_lag),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "blue") +
+  scale_colour_manual("", 
+                      breaks = c("Forecasted Index (n+4)", "Actual Index"),
+                      values = c("red", "blue")) +
+  xlab("Date")+
+  ylab("Rent Zillow Home Value Index")+
+  ggtitle("2010-2019 Zillow Home Value Time Series \n High income areas - Forecast (n+4) vs Predicted")
+
+```
+
+
+
+

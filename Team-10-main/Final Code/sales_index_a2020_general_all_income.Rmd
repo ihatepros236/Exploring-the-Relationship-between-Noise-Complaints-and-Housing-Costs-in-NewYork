@@ -1,0 +1,122 @@
+---
+title: "sales_index_a2020_general_all_income"
+output: html_notebook
+---
+
+
+```{r}
+
+install.packages("mondate")
+library(mondate)
+
+library(stringr)
+
+if (!require(remotes)) install.packages("remotes")
+remotes::install_github("keithabailey/PRMTools")
+library(PRMTools)
+
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+suppressPackageStartupMessages(if (!require(xts)) install.packages("xts"))
+library(xts)
+suppressPackageStartupMessages(if (!require(forecast)) install.packages("forecast") )
+library(forecast)
+
+if (!require(rlist)) install.packages("rlist")
+library(rlist)
+
+
+if (!require(Ecdat)) install.packages("Ecdat")
+library(Ecdat)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+
+if (!require(Hmisc)) install.packages("Hmisc")
+library(Hmisc)
+
+if (!require(ISLR)) install.packages("ISLR")
+library(ISLR)
+```
+
+```{r}
+#Read files
+
+sales_data_mod_a2020 <- read.csv("sales_data_mod_a2020.csv")
+
+head(sales_data_mod_a2020)
+```
+
+```{r}
+q1 = summary(sales_data_mod_a2020$comp_ratio_1000_total)[2]
+q3 = summary(sales_data_mod_a2020$comp_ratio_1000_total)[5]
+t_min = q1 - (3*IQR(sales_data_mod_a2020$comp_ratio_1000_total))
+t_max = q3 + (3*IQR(sales_data_mod_a2020$comp_ratio_1000_total))
+sales_data_mod_a2020 <- sales_data_mod_a2020%>% mutate(outlier = case_when(comp_ratio_1000_total<t_min ~ -1, comp_ratio_1000_total>t_max ~ 1, TRUE ~ 0))
+```
+
+
+1a. Low Income After 2020 General Model
+
+```{r}
+sales_data_mod_a2020$month <- format(as.Date(sales_data_mod_a2020$zillow_month_day),"%m")
+min_date <- as.Date(min(sales_data_mod_a2020$zillow_month_day))
+sales_data_mod_a2020$month_number <- mondf(min_date, sales_data_mod_a2020$zillow_month_day)
+list_columns <- colnames(sales_data_mod_a2020)
+filter_columns = list_columns[grepl("^comp_ratio*|^zillow_sales_value_index|var_zip|^month|Total_income_per_capita", list_columns)]
+filter_columns = filter_columns[!filter_columns %in% c("month_number","-zillow_sales_value_index_lag")]
+df_lma2020 <- sales_data_mod_a2020%>%filter(outlier==0)%>%select(filter_columns)
+lma2020 <- lm(zillow_sales_value_index ~ ., data=df_lma2020)
+
+#Total_income_per_capita
+
+print("Adjusted R square:")
+summary(lma2020)$adj.r.squared
+print("FStatistic:")
+summary(lma2020)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lma2020)$coefficients)%>%filter(.[[4]] <0.05))
+print("Largest coefficients:")
+data.frame(summary(lma2020)$coefficients)%>%filter(.[[4]] <0.05)%>% arrange(desc(abs(Estimate)))
+sel_columns_lma2020 <- row.names(data.frame(summary(lma2020)$coefficients)%>%filter(.[[4]] <0.05))
+
+
+```
+
+```{r}
+df_lma2020_opt <- sales_data_mod_a2020%>%filter(outlier==0)%>%filter(var_zip!="_11249")%>%select(c(sel_columns_lma2020[!grepl("var_zip|^month|*Intercept*",sel_columns_lma2020)],var_zip,month,zillow_sales_value_index,zillow_month_day))
+
+lma2020_opt <- lm(zillow_sales_value_index ~ .-zillow_month_day, data=df_lma2020_opt)
+
+print("Adjusted R square:")
+summary(lma2020_opt)$adj.r.squared
+print("FStatistic:")
+summary(lma2020_opt)$fstatistic
+
+print("Number of significant variables:")
+nrow(data.frame(summary(lma2020_opt)$coefficients))
+print("Largest coefficients:")
+data.frame(summary(lma2020_opt)$coefficients)%>% arrange(desc(abs(Estimate)))
+print("Complaint coefficients:")
+data.frame(summary(lma2020_opt)$coefficients)[sel_columns_lma2020[grepl("comp_ratio|Intercept",sel_columns_lma2020)],]%>% arrange(desc(abs(Estimate)))
+
+df_lma2020_opt$prediction <- predict(lma2020_opt, newdata=df_lma2020_opt)
+
+ggplot(data = df_lma2020_opt,aes(x = as.Date(zillow_month_day))) + 
+  stat_summary(aes(y = prediction, colour = "Predicted Index"),geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = prediction),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "red") +
+  stat_summary(aes(y=zillow_sales_value_index, colour = "Actual Index"), geom = "line", fun = "mean", size= 1) +
+  stat_summary(aes(y = zillow_sales_value_index),geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.1,fill = "blue") +
+  scale_colour_manual("", 
+                      breaks = c("Predicted Index", "Actual Index"),
+                      values = c("red", "blue")) +
+  xlab("Date")+
+  ylab("Sales Zillow Home Value Index")+
+  ggtitle("2021-2023 Zillow Home Value Time Series \n Actual vs Predicted")
+
+
+```
+
+

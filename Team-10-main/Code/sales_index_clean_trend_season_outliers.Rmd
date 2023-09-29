@@ -1,0 +1,442 @@
+---
+title: "Final Project - Removing Trend, Seasonality and Outliers"
+output:
+  html_document:
+    df_print: paged
+---
+This notebook removes trend and seasonality from the dataset.
+
+```{r}
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+suppressPackageStartupMessages(if (!require(xts)) install.packages("xts"))
+library(xts)
+suppressPackageStartupMessages(if (!require(forecast)) install.packages("forecast") )
+library(forecast)
+
+if (!require(rlist)) install.packages("rlist")
+library(rlist)
+
+
+if (!require(Ecdat)) install.packages("Ecdat")
+library(Ecdat)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+
+if (!require(Hmisc)) install.packages("Hmisc")
+library(Hmisc)
+
+if (!require(ISLR)) install.packages("ISLR")
+library(ISLR)
+
+```
+
+```{r}
+sales_data <- read.csv("join_sales_index_datasets.csv")
+building_zip <- read.csv("building_zip.csv")
+head(sales_data)
+head(sales_data %>% filter(sales_data$zillow_zip == 11434))
+sales_data  <- sales_data %>% filter(!zillow_zip %in% building_zip$Zip_Code)%>%filter(!zillow_zip %in% c(11434))
+head(sales_data)
+sales_data %>% filter(sales_data$zillow_zip == 11434)
+
+```
+
+Graph population density
+
+```{r}
+ggplot(sales_data %>% filter(sales_data$month %in% c('2010-01','2023-01')), aes(x=population, color=month)) +
+  geom_density() +
+  ggtitle("2010-01 and 2023-01 Population per zip code density distribution")+ theme_bw()
+
+ggplot(sales_data %>% filter(sales_data$month %in% c('2023-01')), aes(y=Total_income_per_capita, x=reorder(income_group,Total_income_per_capita), color=income_group)) +
+  geom_boxplot() +
+  ggtitle("Zip code income per capita boxplot distribution")+ theme_bw() +
+  scale_y_continuous(trans='log') + scale_x_discrete(name ="Zip Code Income Group")
+
+```
+
+
+1. Test different methods to remove trend and seasonality:
+- Decompose and forecast tools
+- Directly running a regression using nrow and month as variables 
+
+
+```{r}
+# Select only time series variables and zip codes
+list_columns <- colnames(sales_data)
+filter_columns = list_columns[grepl("*comp_ratio*|zillow_month_day|zillow_zip|zillow_month|zillow_sales_value_index", list_columns)]
+# Test total complaint ratio grouped by month
+sales_data_selcol <- select(sales_data,filter_columns)%>%group_by(zillow_month_day) %>% summarise(comp_ratio_1000_total = mean(comp_ratio_1000_total), zillow_sales_value_index=mean(zillow_sales_value_index))
+# Create nrow variable
+sales_data_selcol$nrow <- c(1:nrow(sales_data_selcol))
+# Create month categorical value
+sales_data_selcol$month <- format(as.Date(sales_data_selcol$zillow_month_day),"%m")
+# Plot time series: dataset seems to have seasonality and trend. Even more important, there is a significant change in the behavior of the time series from 2020, separate models will have to be developed for the period before 2020 and after 2020.
+ggplot(data=sales_data,aes(x=as.Date(zillow_month_day), comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 years", labels = function(x) format(x,"%Y"), name = 'Date') +
+  scale_y_continuous(name = 'Total complaint ratio per 1000 inhabitants')+
+  ggtitle("Total Complaint Ratio Time Series and 95% interval") + theme_bw()
+
+ggplot(data=sales_data,aes(x=as.Date(zillow_month_day), zillow_sales_value_index)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 years", labels = function(x) format(x,"%Y"), name = 'Date') +
+  scale_y_continuous(name = 'Zillow sales home value index')+
+  ggtitle("Zillow sales home value index Time Series and 95% interval") + theme_bw()
+
+```
+
+
+```{r}
+# Create year variable to filter specific years from the dataset
+sales_data_selcol$year <- as.numeric(format(as.Date(sales_data_selcol$zillow_month_day),"%Y"))
+sales_data_selcol_a2020 <- sales_data_selcol %>% filter(year > 2020)
+sales_data_selcol_b2020 <- sales_data_selcol %>% filter(year < 2020)
+```
+
+```{r}
+# Try R decompose and forecast library to remove trend and seasonality
+ts_sales_data <- ts(sales_data_selcol$comp_ratio_1000_total, frequency = 12, start = c(2010, 1))
+head(ts_sales_data,24)
+dcomp_sales_data <- decompose(ts_sales_data)
+plot(dcomp_sales_data)
+deseason_sales_data = seasadj(dcomp_sales_data)
+plot.ts(deseason_sales_data)
+dtrend_sales_data = diff(deseason_sales_data)
+plot.ts(dtrend_sales_data)
+
+ts_sales_data_a2020 <- ts(sales_data_selcol_a2020$comp_ratio_1000_total, frequency = 12, start = c(2021, 1))
+head(ts_sales_data_a2020,24)
+dcomp_sales_data_a2020 <- decompose(ts_sales_data_a2020)
+plot(dcomp_sales_data_a2020)
+deseason_sales_data_a2020 = seasadj(dcomp_sales_data_a2020)
+plot.ts(deseason_sales_data_a2020)
+dtrend_sales_data_a2020 = diff(deseason_sales_data_a2020)
+plot.ts(dtrend_sales_data_a2020)
+
+ts_sales_data_b2020 <- ts(sales_data_selcol_b2020$comp_ratio_1000_total, frequency = 12, start = c(2010, 1))
+dcomp_sales_data_b2020 <- decompose(ts_sales_data_b2020)
+plot(dcomp_sales_data_b2020)
+head(ts_sales_data_b2020,24)
+deseason_sales_data_b2020 = seasadj(dcomp_sales_data_b2020)
+plot.ts(deseason_sales_data_b2020)
+dtrend_sales_data_b2020 = diff(deseason_sales_data_b2020)
+plot.ts(dtrend_sales_data_b2020)
+
+```
+
+```{r}
+#Manual lineal regression 
+#After 2020:
+reg_seas_ts_a2020 <- lm(comp_ratio_1000_total ~ month, data = sales_data_selcol_a2020)
+summary(reg_seas_ts_a2020)
+sales_data_selcol_a2020$deseas_comp<- sales_data_selcol_a2020$comp_ratio_1000_total - predict(reg_seas_ts_a2020, newdata = sales_data_selcol_a2020)
+ggplot(data=sales_data_selcol_a2020, aes(y=deseas_comp, x=as.Date(zillow_month_day))) +  geom_line()+scale_x_date(date_breaks="6 month", labels = function(x) format(x,"%Y-%m")) +ggtitle("2021-2023 Total complaint ratio after removing seasonality by \n running a linear regression on nrow and month")
+reg_trend_ts_a2020 <- lm(deseas_comp ~ nrow, data = sales_data_selcol_a2020)
+summary(reg_trend_ts_a2020)
+sales_data_selcol_a2020$detrend_comp<- sales_data_selcol_a2020$deseas_comp - predict(reg_trend_ts_a2020, newdata = sales_data_selcol_a2020)
+ggplot(data=sales_data_selcol_a2020, aes(y=detrend_comp, x=as.Date(zillow_month_day))) +  geom_line()+scale_x_date(date_breaks="6 month", labels = function(x) format(x,"%Y-%m")) +ggtitle("2021-2023 Total complaint ratio after removing trend and seasonality by \n running a linear regression on nrow and month")
+
+
+reg_sales_ts_a2020 <- lm(zillow_sales_value_index ~ nrow, data = sales_data_selcol_a2020)
+summary(reg_sales_ts_a2020)
+#sales_data_selcol_a2020$detrend_sales_index<- sales_data_selcol_a2020$zillow_sales_value_index - predict(reg_sales_ts_a2020, newdata = sales_data_selcol_a2020)
+
+sales_data_selcol_a2020$detrend_sales_index <- c(0,diff(sales_data_selcol_a2020$zillow_sales_value_index))
+
+ggplot(data=sales_data_selcol_a2020, aes(y=detrend_sales_index, x=as.Date(zillow_month_day))) +  geom_line()+scale_x_date(date_breaks="6 month", labels = function(x) format(x,"%Y-%m")) +ggtitle("2021-2023 Sales index after removing trend by \n substracting gradients")
+
+#Before 2020:
+sales_data_selcol_b2020 <- sales_data_selcol_b2020%>% mutate(month = case_when(year<=2013 ~ paste(month,"1",sep = "-"), TRUE ~ month))
+reg_seas_ts_b2020 <- lm(comp_ratio_1000_total ~ month, data = sales_data_selcol_b2020)
+summary(reg_seas_ts_b2020)
+sales_data_selcol_b2020$deseas_comp<- sales_data_selcol_b2020$comp_ratio_1000_total - predict(reg_seas_ts_b2020, newdata = sales_data_selcol_b2020)
+head(sales_data_selcol_b2020['year'])
+col_name_u <- "deseas_comp"
+sales_data_selcol_b2020$deseas_min <- as.numeric(sales_data_selcol_b2020%>%filter(month=='01'& year == 2014)%>%select(col_name_u))
+
+sales_data_selcol_b2020[col_name_u] <- ifelse(sales_data_selcol_b2020$year <=2013,
+           sales_data_selcol_b2020[[col_name_u]] + sales_data_selcol_b2020$deseas_min,
+           sales_data_selcol_b2020[[col_name_u]])
+
+ggplot(data=sales_data_selcol_b2020, aes(y=deseas_comp, x=as.Date(zillow_month_day))) +  geom_line()+scale_x_date(date_breaks="1 years", labels = function(x) format(x,"%Y")) +ggtitle("2010-2019 Total complaint ratio after removing seasonality by \n running a linear regression on nrow and month")
+reg_trend_ts_b2020 <- lm(deseas_comp ~ nrow, data = sales_data_selcol_b2020)
+summary(reg_trend_ts_b2020)
+sales_data_selcol_b2020$detrend_comp<- sales_data_selcol_b2020$deseas_comp - predict(reg_trend_ts_b2020, newdata = sales_data_selcol_b2020)
+ggplot(data=sales_data_selcol_b2020, aes(y=detrend_comp, x=as.Date(zillow_month_day))) +  geom_line()+scale_x_date(date_breaks="1 years", labels = function(x) format(x,"%Y"))+ggtitle("2010-2019 Total complaint ratio after removing trend and seasonality by \n running a linear regression on nrow and month") 
+
+
+sales_data_selcol_b2020$detrend_sales_index <- c(0,diff(sales_data_selcol_b2020$zillow_sales_value_index))
+
+ggplot(data=sales_data_selcol_b2020, aes(y=detrend_sales_index, x=as.Date(zillow_month_day))) +  geom_line()+scale_x_date(date_breaks="6 month", labels = function(x) format(x,"%Y-%m")) +ggtitle("2010-2019 Sales index after removing trend by \n substracting gradients")
+
+```
+Both the decompose and de-trend tools from the forecast library and running a linear regression on nrow and month over the aggregated total complaint ratio series effectively remove trend and seasonality from the time series. However, the linear regression method is the selected method as it seems to have less impact in the amount of information loss. The next step is to implement the same method for each type of complaint and for each zip code separately.
+
+
+```{r}
+### Dataset after 2020 #####
+list_zips = unique(sales_data$zillow_zip)
+sales_data$month <- format(as.Date(sales_data$zillow_month_day),"%m")
+k = 1
+for (j in list_zips){
+  #j = 10583
+  sales_data_zip <- sales_data %>% filter(zillow_year>2020 & zillow_zip == j)
+  sales_data_zip$nrow <- c(1:nrow(sales_data_zip))
+  
+  #head(sales_data_zip)
+  ts_comp_columns = list_columns[grepl("*comp_ratio*", list_columns)]
+  #reg_trend_sales <- lm(zillow_sales_value_index ~ nrow, data = sales_data_zip) 
+  #sales_data_zip$dtrend_zillow_sales_value_index <- sales_data_zip$zillow_sales_value_index - predict(reg_trend_sales, newdata = sales_data_zip)
+  sales_data_zip$dtrend_zillow_sales_value_index <- c(0,diff(sales_data_zip$zillow_sales_value_index))
+  for (i in ts_comp_columns) {
+    
+    #i = "comp_ratio_1000_total"
+    #plot(sales_data_zip$comp_ratio_1000_total, type='l')
+    # Remove monthly seasonality
+    dseascolname <- paste("dseas",i,sep = "_") 
+    df_lm = sales_data_zip %>% select(all_of(c(i,"month")))
+    df_lm[is.na(df_lm)] <- 0
+    reg_seas <- lm(df_lm[,1] ~ month, data = df_lm)
+    summary(reg_seas)
+    sales_data_zip[i] <- df_lm[i]
+    sales_data_zip[dseascolname] <- sales_data_zip[i] - predict(reg_seas, newdata = df_lm)
+    #print(paste(j,dseascolname))
+    #sales_data_zip %>% select(all_of(c(i,"zillow_month",dseascolname)))
+    #plot(sales_data_zip$dseas_comp_ratio_1000_total, type='l')
+    # Remove trend
+    dtrendcolname <- paste("dtrend",i,sep = "_") 
+    df_lm = sales_data_zip %>% select(all_of(c(dseascolname,"nrow")))
+    reg_trend <- lm(df_lm[,1] ~ nrow, data = df_lm)
+    summary(reg_trend)
+    sales_data_zip[dtrendcolname] <- sales_data_zip[dseascolname] - predict(reg_trend, newdata = df_lm)
+    #print(paste(j,dtrendcolname))
+    sales_data_zip %>% select(all_of(c(i,"zillow_month",dseascolname,dtrendcolname)))
+    #plot(sales_data_zip$dtrend_comp_ratio_1000_total, type='l')
+  }
+  print(paste(j,dseascolname,dtrendcolname))
+  if (k==1){sales_data_mod_a2020<-data.frame(sales_data_zip)}
+  else {sales_data_mod_a2020<-rbind(sales_data_mod_a2020,sales_data_zip)}
+  k=k+1
+  #print(dim(sales_data_mod_a2020))
+}
+tail(sales_data_mod_a2020)
+
+```
+
+```{r}
+ggplot(data=sales_data_mod_a2020,aes(x=as.Date(zillow_month_day), comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="3 month", labels = function(x) format(x,"%Y-%m")) +
+  ggtitle("2021-2023 Total Complaint Ratio Time Series and 95% interval \n (Original)")
+
+ggplot(data=sales_data_mod_a2020,aes(x=as.Date(zillow_month_day), dseas_comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="3 month", labels = function(x) format(x,"%Y-%m"), name = 'Date') +
+  ggtitle("2021-2023 Total Complaint Ratio Time Series and 95% interval\n (Seasonality removed)")+ theme_bw()+ scale_y_continuous(name = 'Total complaint ratio without seasonality and trend')
+
+ggplot(data=sales_data_mod_a2020,aes(x=as.Date(zillow_month_day), dtrend_comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="3 month", labels = function(x) format(x,"%Y-%m"), name = 'Date') +
+  ggtitle("2021-2023 Total Complaint Ratio Time Series and 95% interval\n (Trend and Seasonality removed)")+ theme_bw()+ scale_y_continuous(name = 'Total complaint ratio without seasonality and trend')
+
+
+```
+
+```{r}
+### Dataset before 2020 #####
+
+list_zips = unique(sales_data$zillow_zip)
+sales_data$month <- format(as.Date(sales_data$zillow_month_day),"%m")
+sales_data <- sales_data%>% mutate(month = case_when(year<=2013 ~ paste(month,"1",sep = "-"), TRUE ~ month))
+k = 1
+for (j in list_zips){
+
+  #j = 10044
+  sales_data_zip <- sales_data %>% filter(zillow_year<2020 & zillow_zip == j)
+  sales_data_zip$nrow <- c(1:nrow(sales_data_zip))
+  
+  #head(sales_data_zip)
+  ts_comp_columns = list_columns[grepl("*comp_ratio*", list_columns)]
+  #reg_trend_sales <- lm(zillow_sales_value_index ~ nrow, data = sales_data_zip) 
+  #sales_data_zip$dtrend_zillow_sales_value_index <- sales_data_zip$zillow_sales_value_index - predict(reg_trend_sales, newdata = sales_data_zip)
+  sales_data_zip$dtrend_zillow_sales_value_index <- c(0,diff(sales_data_zip$zillow_sales_value_index))
+  for (i in ts_comp_columns) {
+    
+    #i = "comp_ratio_1000_total"
+    #plot(sales_data_zip$comp_ratio_1000_total, type='l')
+    # Remove monthly seasonality
+    dseascolname <- paste("dseas",i,sep = "_") 
+    df_lm = sales_data_zip %>% select(all_of(c(i,"month")))
+    df_lm[is.na(df_lm)] <- 0
+    reg_seas <- lm(df_lm[,1] ~ month, data = df_lm)
+    summary(reg_seas)
+    sales_data_zip[i] <- df_lm[i]
+    sales_data_zip[dseascolname] <- sales_data_zip[i] - predict(reg_seas, newdata = df_lm)
+    #plot(sales_data_zip$dseas_comp_ratio_1000_total, type='l')
+    #print(paste(j,dseascolname))
+    #sales_data_zip %>% select(all_of(c(i,"zillow_month",dseascolname)))
+    
+    sales_data_zip$deseas_min <- as.numeric(sales_data_zip%>%filter(month=='01'& zillow_year == 2014)%>%select(dseascolname))
+    sales_data_zip[dseascolname] <- ifelse(sales_data_zip$zillow_year <=2013,
+                                     sales_data_zip[[dseascolname]] + sales_data_zip$deseas_min,
+                                     sales_data_zip[[dseascolname]])
+    #plot(sales_data_zip$dseas_comp_ratio_1000_total, type='l')
+    # Remove trend
+    dtrendcolname <- paste("dtrend",i,sep = "_") 
+    df_lm = sales_data_zip %>% select(all_of(c(dseascolname,"nrow")))
+    reg_trend <- lm(df_lm[,1] ~ nrow, data = df_lm)
+    summary(reg_trend)
+    sales_data_zip[dtrendcolname] <- sales_data_zip[dseascolname] - predict(reg_trend, newdata = df_lm)
+    #print(paste(j,dtrendcolname))
+    #sales_data_zip %>% select(all_of(c(i,"zillow_month",dseascolname,dtrendcolname)))
+    #plot(sales_data_zip$dtrend_comp_ratio_1000_total, type='l')
+  }
+  print(paste(j,dseascolname,dtrendcolname))
+  if (k==1){sales_data_mod_b2020<-data.frame(sales_data_zip)}
+  else {sales_data_mod_b2020<-rbind(sales_data_mod_b2020,sales_data_zip)}
+  k=k+1
+  #print(dim(sales_data_mod_b2020))
+}
+tail(sales_data_mod_b2020)
+
+```
+
+```{r}
+ggplot(data=sales_data_mod_b2020,aes(x=as.Date(zillow_month_day), comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 year", labels = function(x) format(x,"%Y")) +
+  ggtitle("2010-2019 Total Complaint Ratio Time Series and 95% interval \n (Original)")
+
+ggplot(data=sales_data_mod_b2020,aes(x=as.Date(zillow_month_day), dseas_comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 year", labels = function(x) format(x,"%Y"), name = 'Date') +
+  ggtitle("2010-2019 Total Complaint Ratio Time Series and 95% interval\n (Seasonality removed)") + theme_bw()+ scale_y_continuous(name = 'Total complaint ratio without seasonality')
+
+ggplot(data=sales_data_mod_b2020,aes(x=as.Date(zillow_month_day), dtrend_comp_ratio_1000_total)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 year", labels = function(x) format(x,"%Y"), name = 'Date') +
+  ggtitle("2010-2019 Total Complaint Ratio Time Series and 95% interval\n (Trend and Seasonality removed)") + theme_bw()+ scale_y_continuous(name = 'Total complaint ratio without seasonality and trend')
+```
+Plot De-trend value index
+
+```{r}
+
+### 2021-2023 period ####
+
+ggplot(data=sales_data_mod_a2020,aes(x=as.Date(zillow_month_day), zillow_sales_value_index)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="3 month", labels = function(x) format(x,"%Y-%m")) +
+  ggtitle("2021-2023 Zillow Home Value Time Series and 95% interval \n (Original)")
+
+ggplot(data=sales_data_mod_a2020,aes(x=as.Date(zillow_month_day), dtrend_zillow_sales_value_index)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="3 month", labels = function(x) format(x,"%Y-%m")) +
+  ggtitle("2021-2023 Zillow Home Value Time Series and 95% interval \n (Trend and Seasonality removed)")
+
+
+### 2010-2019 period ####
+
+ggplot(data=sales_data_mod_b2020,aes(x=as.Date(zillow_month_day), zillow_sales_value_index)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 year", labels = function(x) format(x,"%Y")) +
+  ggtitle("2010-2019 Zillow Home Value Time Series and 95% interval \n (Original)")
+
+ggplot(data=sales_data_mod_b2020,aes(x=as.Date(zillow_month_day), dtrend_zillow_sales_value_index)) +
+  stat_summary(geom = "line", fun = "mean") +
+  stat_summary(geom = "ribbon", fun.data = "mean_cl_normal", alpha = 0.3) +
+  scale_x_date(date_breaks="1 year", labels = function(x) format(x,"%Y")) +
+  ggtitle("2010-2019 Zillow Home Value Time Series and 95% interval \n (Trend and Seasonality removed)")
+
+
+```
+Scatter plots
+
+```{r}
+ggplot(data=sales_data_mod_a2020,aes(x=comp_ratio_1000_total, zillow_sales_value_index)) +geom_point()+ggtitle("2021-2023 Zillow Home Value vs Total Complaint Ratio \n (Original)")+scale_x_continuous(name='Total complaint rate per zip code') +scale_y_continuous(name = 'Zillow sales value index') + theme_bw()
+ggplot(data=sales_data_mod_a2020,aes(x=dtrend_comp_ratio_1000_total, dtrend_zillow_sales_value_index)) +geom_point()+ggtitle("2021-2023 Zillow Home Value vs Total Complaint Ratio \n (Trend and Seasonality removed)") +scale_x_continuous(name='Total complaint rate per zip code') +scale_y_continuous(name = 'Zillow sales value index') + theme_bw()
+
+```
+Calculate Outliers
+
+```{r}
+### 2021 - 2023 ####
+
+q1 = summary(sales_data_mod_a2020$dtrend_comp_ratio_1000_total)[2]
+q3 = summary(sales_data_mod_a2020$dtrend_comp_ratio_1000_total)[5]
+t_min = q1 - (1.5*IQR(sales_data_mod_a2020$dtrend_comp_ratio_1000_total))
+t_max = q3 + (1.5*IQR(sales_data_mod_a2020$dtrend_comp_ratio_1000_total))
+sales_data_mod_a2020 <- sales_data_mod_a2020%>% mutate(outlier = case_when(dtrend_comp_ratio_1000_total<t_min ~ -1, dtrend_comp_ratio_1000_total>t_max ~ 1, TRUE ~ 0))
+
+### 2010 - 2019 ####
+
+q1 = summary(sales_data_mod_b2020$dtrend_comp_ratio_1000_total)[2]
+q3 = summary(sales_data_mod_b2020$dtrend_comp_ratio_1000_total)[5]
+t_min = q1 - (1.5*IQR(sales_data_mod_b2020$dtrend_comp_ratio_1000_total))
+t_max = q3 + (1.5*IQR(sales_data_mod_b2020$dtrend_comp_ratio_1000_total))
+sales_data_mod_b2020 <- sales_data_mod_b2020%>% mutate(outlier = case_when(dtrend_comp_ratio_1000_total<t_min ~ -1, dtrend_comp_ratio_1000_total>t_max ~ 1, TRUE ~ 0))
+
+```
+
+Scatterplots without outliers
+
+```{r}
+ggplot(data=sales_data_mod_a2020%>%filter(outlier==0),aes(x=dtrend_comp_ratio_1000_total, y=dtrend_zillow_sales_value_index)) +geom_point()+ggtitle("2021-2023 Zillow Home Value vs Total Complaint Ratio \n (Trend, Seasonality and Outliers Removed)") +scale_x_continuous(name='Total complaint rate per zip code') +scale_y_continuous(name = 'Zillow sales value index') + theme_bw()
+
+ggplot(data=sales_data_mod_b2020%>%filter(outlier==0),aes(x=dtrend_comp_ratio_1000_total, y=dtrend_zillow_sales_value_index)) +geom_point()+ggtitle("2010-2019 Zillow Home Value vs Total Complaint Ratio \n (Trend, Seasonality and Outliers Removed)") +scale_x_continuous(name='Total complaint rate per zip code') +scale_y_continuous(name = 'Zillow sales value index') + theme_bw()
+```
+
+Export files
+
+```{r}
+sales_data_mod_a2020$var_zip <- paste('_',sales_data_mod_a2020$zillow_zip,sep='')
+sales_data_mod_a2020<- sales_data_mod_a2020%>% select(-starts_with('zip_1'))
+write.csv(sales_data_mod_a2020,"sales_data_mod_a2020.csv", row.names = FALSE)
+
+sales_data_mod_b2020$var_zip <- paste('_',sales_data_mod_b2020$zillow_zip,sep='')
+sales_data_mod_b2020<- sales_data_mod_b2020%>% select(-starts_with('zip_1'))
+sales_data_mod_b2020<- sales_data_mod_b2020[,!names(sales_data_mod_b2020) %in% c("deseas_min")]
+write.csv(sales_data_mod_b2020,"sales_data_mod_b2020.csv", row.names = FALSE)
+```
+
+
+
+
+```{r}
+#unique(sales_data_mod_a2020$income_group)
+list_columns <- colnames(sales_data_mod_a2020)
+filter_columns = list_columns[grepl("*dtrend_comp_ratio*|dtrend_zillow_sales_value_index|var_zip", list_columns)]
+df_lm2 <- sales_data_mod_a2020%>%filter(outlier==0)%>%filter(income_group=="low")%>%select(filter_columns)
+lm2 <- lm(dtrend_zillow_sales_value_index ~ ., data=df_lm2)
+summary(lm2)
+
+
+```
+
+```{r}
+list_columns <- colnames(sales_data_mod_b2020)
+filter_columns = list_columns[grepl("*dtrend_comp_ratio*|dtrend_zillow_sales_value_index|var_zip", list_columns)]
+df_lm2 <- sales_data_mod_b2020%>%filter(outlier==0)%>%filter(income_group=="medium")%>%select(filter_columns)
+lm2 <- lm(dtrend_zillow_sales_value_index ~ ., data=df_lm2)
+summary(lm2)
+```
+
+
+```{r}
+
+```
+

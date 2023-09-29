@@ -1,0 +1,59 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+suppressPackageStartupMessages(if (!require(xts)) install.packages("xts"))
+library(xts)
+suppressPackageStartupMessages(if (!require(forecast)) install.packages("forecast") )
+library(forecast)
+
+if (!require(rlist)) install.packages("rlist")
+library(rlist)
+
+
+if (!require(Ecdat)) install.packages("Ecdat")
+library(Ecdat)
+
+if (!require(ggplot2)) install.packages("ggplot2")
+library(ggplot2)
+
+if (!require(Hmisc)) install.packages("Hmisc")
+library(Hmisc)
+
+if (!require(ISLR)) install.packages("ISLR")
+library(ISLR)
+```
+
+```{r}
+#Read files
+
+sales_data_mod_a2020 <- read.csv("sales_data_mod_a2020.csv")
+sales_data_mod_b2020 <- read.csv("sales_data_mod_b2020.csv")
+
+```
+
+```{r}
+list_columns <- colnames(sales_data_mod_a2020)
+filter_columns = list_columns[grepl("*dtrend_comp_ratio*|dtrend_zillow_sales_value_index|var_zip", list_columns)]
+df_lm2 <- sales_data_mod_a2020%>%filter(outlier==0)%>%filter(income_group=="low")%>%select(filter_columns)
+lm2 <- lm(dtrend_zillow_sales_value_index ~ ., data=df_lm2)
+summary(lm2)
+
+```
+```{r}
+list_columns <- colnames(sales_data_mod_a2020)
+filter_columns = list_columns[grepl("*dtrend_comp_ratio*|dtrend_zillow_sales_value_index|var_zip", list_columns)]
+df_lm2 <- sales_data_mod_a2020%>%filter(outlier==0)%>%filter(income_group=="low")%>%select(filter_columns)
+lm2 <- lm(dtrend_zillow_sales_value_index ~ ., data=df_lm2)
+summary(lm2)
+```
+
